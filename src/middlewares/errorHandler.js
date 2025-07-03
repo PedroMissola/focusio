@@ -1,33 +1,28 @@
+// NOVO: Este arquivo agora responde com JSON, adequado para uma API.
 module.exports = (app) => {
-  // Middleware para capturar erros 404 (Not Found)
-  app.use((req, res, next) => {
-    res.status(404).render('404', {
-      title: 'Página Não Encontrada',
-      errorMessage: 'A página que você está procurando não existe.',
+    // Middleware para capturar rotas não encontradas (Erro 404)
+    app.use((req, res, next) => {
+        res.status(404).json({
+            error: 'Not Found',
+            message: `A rota '${req.path}' com o método '${req.method}' não foi encontrada.`,
+        });
     });
-  });
 
-  // Middleware de Tratamento de Erros
-  app.use((err, req, res, next) => {
-    //console.error(err.stack);
+    // Middleware de Tratamento de Erros (deve ser o último middleware)
+    app.use((err, req, res, next) => {
+        // Logar o erro usando um logger como o Pino seria ideal aqui.
+        console.error(err); // Mantenha um log do erro no servidor
 
-    // Verifica o ambiente
-    const isDevelopment = process.env.NODE_ENV === 'development';
+        const isDevelopment = process.env.NODE_ENV === 'development';
+        
+        // Resposta de erro genérica para produção
+        const errorResponse = {
+            title: 'Internal Server Error',
+            message: 'Ocorreu um erro inesperado no servidor.',
+            // Em desenvolvimento, incluir detalhes do erro para facilitar o debug
+            details: isDevelopment ? err.stack : undefined,
+        };
 
-    // Renderiza uma página de erro com detalhes em desenvolvimento
-    if (isDevelopment) {
-      res.status(500).render('error', {
-        title: 'Erro Interno do Servidor',
-        errorMessage: 'Algo deu errado!',
-        errorDetails: err.stack,
-      });
-    } else {
-      // Renderiza uma página de erro genérica em produção
-      res.status(500).render('error', {
-        title: 'Erro Interno do Servidor',
-        errorMessage: 'Algo deu errado!',
-        errorDetails: null,
-      });
-    }
-  });
+        res.status(500).json(errorResponse);
+    });
 };

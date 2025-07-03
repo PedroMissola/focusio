@@ -1,204 +1,88 @@
 const dns = require("dns").promises;
-const bcrypt = require('bcryptjs');
-const owasp = require('owasp-password-strength-test');
+const zxcvbn = require("zxcvbn"); // NOVO: Substituindo o owasp-password-strength-test
 
-const SALT_ROUNDS = 12;
-
-// Sistema de mensagens personalizadas
-const messages = {
+// Sistema de mensagens para erros
+const errorMessages = {
   email: {
     empty: "Email não pode ser vazio.",
     invalidFormat: "Formato de email inválido.",
-    invalidDomain: "Domínio do email não pôde ser encontrado.",
-    valid: "O email é válido."
+    invalidDomain: "Domínio do email inválido.",
   },
   password: {
     empty: "Senha não pode ser vazia.",
-    weak: "Senha não é forte o suficiente.",
-    valid: "A senha é válida."
+    weak: "A senha é muito fraca. Tente combinar letras, números e símbolos.",
   }
 };
 
 // Funções de validação de email
 async function validarEmail(email) {
-  // console.log("Iniciando validação de email:", email);
-  if (!email) {
-    // console.log(messages.email.empty);
-    return messages.email.empty;
-  }
-  if (typeof email !== 'string') {
-    // console.log(messages.email.invalidFormat);
-    return messages.email.invalidFormat;
-  }
-  if (!email.includes('@')) {
-    // console.log(messages.email.invalidFormat);
-    return messages.email.invalidFormat;
-  }
+  if (!email || typeof email !== 'string') throw new Error(errorMessages.email.empty);
+  
+  const regexEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!regexEmail.test(email)) throw new Error(errorMessages.email.invalidFormat);
 
-  const partesEmail = email.split('@');
-  if (partesEmail.length !== 2 || !partesEmail[1].includes('.')) {
-    // console.log(messages.email.invalidFormat);
-    return messages.email.invalidFormat;
-  }
-
-  const regexEmailSimples = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!regexEmailSimples.test(email)) {
-    // console.log(messages.email.invalidFormat);
-    return messages.email.invalidFormat;
-  }
-
+  const [, domain] = email.split('@');
+  
   try {
-    await dns.lookup(partesEmail[1]);
+    // A verificação de DNS pode adicionar latência. Uma alternativa é confiar
+    // no e-mail de verificação que o Firebase envia.
+    await dns.lookup(domain);
   } catch (error) {
-    // console.log(messages.email.invalidDomain);
-    return messages.email.invalidDomain;
+    throw new Error(errorMessages.email.invalidDomain);
   }
 
-  // console.log(messages.email.valid);
-  return messages.email.valid;
+  return true; // ALTERADO: Retorna true em caso de sucesso.
 }
 
 // Funções de validação de senha
 function validarSenha(password) {
-  // console.log("Iniciando validação de senha.");
-  if (!password) {
-    // console.log(messages.password.empty);
-    return messages.password.empty;
+  if (!password) throw new Error(errorMessages.password.empty);
+
+  const result = zxcvbn(password);
+  
+  // ALTERADO: Usando o score do zxcvbn. Exigimos no mínimo 2 (escala de 0 a 4).
+  // 0: muito fraca, 1: fraca, 2: razoável, 3: boa, 4: forte
+  if (result.score < 2) {
+    // Você pode até usar o feedback do zxcvbn para dar dicas melhores ao usuário.
+    // ex: result.feedback.suggestions
+    throw new Error(errorMessages.password.weak);
   }
-  const passwordStrength = owasp.test(password);
-  if (!passwordStrength.strong) {
-    // console.log(messages.password.weak);
-    return messages.password.weak;
-  }
-  // console.log(messages.password.valid);
-  return messages.password.valid;
+
+  return true;
 }
 
-// Funções de validação para registro
-async function validateRegisterForm({ email, password }) {
-  // console.log("Validando formulário de registro.");
-  const emailValidationResult = await validarEmail(email);
-  const passwordValidationResult = validarSenha(password);
+// REMOVIDO: Funções repetitivas como validateRegisterForm.
+// A validação agora deve ser feita diretamente nas rotas, lançando erros.
 
-  const errors = [];
-  if (emailValidationResult !== messages.email.valid) {
-    errors.push(emailValidationResult);
-  }
-  if (passwordValidationResult !== messages.password.valid) {
-    errors.push(passwordValidationResult);
-  }
-
-  // console.log("Resultado da validação do formulário de registro:", {
-  //   isValid: errors.length === 0,
-  //   errors
-  // });
-
-  return {
-    isValid: errors.length === 0,
-    errors
-  };
-}
-
-// Funções de validação para login
-async function validateLoginForm({ email, password }) {
-  // console.log("Validando formulário de login.");
-  const emailValidationResult = await validarEmail(email);
-  const passwordValidationResult = validarSenha(password);
-
-  const errors = [];
-  if (emailValidationResult !== messages.email.valid) {
-    errors.push(emailValidationResult);
-  }
-  if (passwordValidationResult !== messages.password.valid) {
-    errors.push(passwordValidationResult);
-  }
-
-  // console.log("Resultado da validação do formulário de login:", {
-  //   isValid: errors.length === 0,
-  //   errors
-  // });
-
-  return {
-    isValid: errors.length === 0,
-    errors
-  };
-}
-
-// Funções de validação para reset de senha
-async function validateResetPasswordForm({ email }) {
-  // console.log("Validando formulário de reset de senha.");
-  const emailValidationResult = await validarEmail(email);
-
-  const errors = [];
-  if (emailValidationResult !== messages.email.valid) {
-    errors.push(emailValidationResult);
-  }
-
-  // console.log("Resultado da validação do formulário de reset de senha:", {
-  //   isValid: errors.length === 0,
-  //   errors
-  // });
-
-  return {
-    isValid: errors.length === 0,
-    errors
-  };
-}
-
-// Função para hash de senha
-async function hashPassword(password) {
-  // console.log("Gerando hash da senha.");
-  try {
-    const salt = await bcrypt.genSalt(SALT_ROUNDS);
-    const hashedPassword = await bcrypt.hash(password, salt);
-    // console.log("Hash da senha gerado com sucesso.");
-    return hashedPassword;
-  } catch (error) {
-    // console.error("Erro ao gerar o hash da senha:", error);
-    throw new Error('Erro ao gerar o hash da senha.');
-  }
-}
-
-// Funções de validação para middleware
 function isNotEmpty(value) {
-  // console.log("Verificando se o valor não está vazio:", value);
-  return value && value.trim().length > 0;
+  return value && typeof value === 'string' && value.trim().length > 0;
 }
 
-// Funções de validação de campos
-function validarCampos(periodo, horarioInicio, horarioTermino, assunto, descricao) {
-  // console.log("Validando campos:", { periodo, horarioInicio, horarioTermino, assunto, descricao });
-  return periodo && horarioInicio && horarioTermino && assunto && descricao;
-}
-
-// Funções de validação de horário
 function validarHorario(horarioInicio, horarioTermino) {
-  // console.log("Validando horário:", { horarioInicio, horarioTermino });
   return horarioInicio < horarioTermino;
 }
 
-// Funções de validação de hora permitida
 function isHoraPermitida(horaInicio, horaTermino, periodo) {
-  // console.log("Verificando se a hora é permitida:", { horaInicio, horaTermino, periodo });
+  const horaInicioInt = parseInt(horaInicio.split(':')[0], 10);
+  const horaTerminoInt = parseInt(horarioTermino.split(':')[0], 10);
+
   const periodosPermitidos = {
-    manhã: [6, 12],
-    tarde: [12, 18],
-    noite: [18, 24]
+    manhã: { inicio: 6, fim: 12 },
+    tarde: { inicio: 12, fim: 18 },
+    noite: { inicio: 18, fim: 24 }
   };
 
-  const [inicioPermitido, fimPermitido] = periodosPermitidos[periodo];
-  return horaInicio >= inicioPermitido && horaTermino <= fimPermitido;
+  const limite = periodosPermitidos[periodo.toLowerCase()];
+  if (!limite) return false;
+  
+  return horaInicioInt >= limite.inicio && horaTerminoInt <= limite.fim;
 }
 
 module.exports = {
-  validateRegisterForm,
-  validateLoginForm,
-  validateResetPasswordForm,
-  hashPassword,
-  isNotEmpty,
+  errorMessages,
   validarEmail,
   validarSenha,
-  validarCampos,
+  isNotEmpty,
   validarHorario,
   isHoraPermitida
 };

@@ -1,126 +1,68 @@
+const express = require('express');
 const authMiddleware = require("../middlewares/auth.js");
 const { signOutUser } = require("../firebase/functions/auth/signout.js");
-const { verifyEmailCode } = require("../firebase/functions/auth/register.js");
-const securityMiddleware = require("../middlewares/security");
 
-async function handleVerifyEmail(req, res) {
-    const { email, code } = req.query;
-    if (!Array.isArray(code)) {
-        return res.render("forms/verify-email", {
-            title: "Verificação de E-mail",
-            message: "Código de verificação inválido.",
-            email: email,
-        });
-    }
-    const verificationCode = code.join(""); // Concatenar os valores dos inputs
+const router = express.Router();
 
+// Rota pública para checar o status de autenticação do usuário.
+router.get("/auth/status", (req, res) => {
+    // A presença de um cookie de sessão válido é o indicador. O authMiddleware faz a verificação real.
+    const isLoggedIn = !!req.cookies.session;
+    res.status(200).json({ loggedIn: isLoggedIn });
+});
+
+// Rota para logout do usuário.
+router.get("/logout", async (req, res) => {
     try {
-        await verifyEmailCode(email, verificationCode);
-        res.redirect("/login");
+        await signOutUser(req, res); // Supondo que esta função invalide a sessão no Firebase
+        
+        // Limpa os cookies no navegador do cliente
+        res.clearCookie("loggedIn");
+        res.clearCookie("session");
+        
+        res.status(200).json({ message: "Logout bem-sucedido." });
     } catch (error) {
-        res.render("forms/verify-email", {
-            title: "Verificação de E-mail",
-            message: "Erro ao verificar e-mail. Por favor, tente novamente.",
-            email: email,
-        });
+        console.error('Erro durante o logout:', error);
+        res.status(500).json({ error: "Falha ao fazer logout." });
     }
-}
+});
 
-function routeGet(app) {
-    app.use(securityMiddleware); // Aplicar o middleware de segurança a todas as rotas
 
-    // Rotas públicas
-    app.get("/", (req, res) => {
-        res.render("index", {
-            title: "Projeto TDAH",
-            query: req.query,
-        });
-    });
+// --- ROTAS PROTEGIDAS ---
 
-    app.get("/auth/status", (req, res) => {
-        const isLoggedIn = req.cookies.loggedIn;
-        res.json({ loggedIn: !!isLoggedIn });
-    });
+// Exemplo de como a rota /agenda ficaria como uma API.
+router.get("/agenda", authMiddleware, async (req, res) => {
+    try {
+        // req.user foi adicionado pelo authMiddleware e contém os dados do usuário logado (UID, email, etc.)
+        const userId = req.user.uid;
+        
+        // AQUI você colocaria a lógica para buscar os dados da agenda do usuário no Firebase
+        // Exemplo: const agendaData = await getAgendaFromFirestore(userId);
 
-    app.get("/login", (req, res) => {
-        res.render("forms/login", {
-            title: "Login",
-            loginErrorMessage: null,
-        });
-    });
-
-    app.get("/resetpassword", (req, res) => {
-        res.render("forms/reset", {
-            title: "Resetar a senha",
-            resetErrorMessage: null,
-            resetSuccessMessage: null,
-        });
-    });
-
-    app.get("/register", (req, res) => {
-        res.render("forms/register", {
-            title: "Registre-se",
-            registerErrorMessage: null,
-        });
-    });
-
-    app.get("/logout", async (req, res, next) => {
-        try {
-            await signOutUser(req, res);
-            if (!res.headersSent) {
-                res.clearCookie("loggedIn");
-                res.clearCookie("session");
-                res.redirect("/login");
-            }
-        } catch (error) {
-            if (!res.headersSent) {
-                res.redirect("/");
-            }
-        }
-    });
-
-    app.get("/error", (req, res) => {
-        res.render("error", {
-            title: "Erro",
-            error: req.query.error,
-        });
-    });
-
-    app.get("/contact", (req, res) => {
-        res.render("Contact", {
-            title: "Contato",
-            contactErrorMessage: null,
-            contactSuccessMessage: null,
-        });
-    });
-
-    app.get("/verify-email", async (req, res) => {
-        const { email, code } = req.query;
-        if (email && code) {
-            await handleVerifyEmail(req, res);
-        } else {
-            res.render("forms/verify-email", {
-                title: "Verificação de E-mail",
-                message: "Por favor, insira o código de verificação enviado para o seu e-mail.",
-                email: req.query.email,
-            });
-        }
-    });
-
-    // Rotas protegidas
-    app.get("/agenda", authMiddleware, (req, res) => {
-        res.render("user/agenda", {
+        res.status(200).json({
             title: "Agenda",
+            // data: agendaData 
+            data: { user: req.user, message: "Dados da agenda iriam aqui." } // Placeholder
         });
-    });
+    } catch (error) {
+        res.status(500).json({ error: "Não foi possível buscar os dados da agenda." });
+    }
+});
 
-    app.get("/task", authMiddleware, (req, res) => {
-        res.render("user/task", {
-            title: "Tarefas",
-            taskSuccessMessage: null,
-            taskErrorMessage: null,
-        });
+// Exemplo de como a rota /task ficaria.
+router.get("/task", authMiddleware, async (req, res) => {
+    // Lógica similar à /agenda para buscar tarefas
+     res.status(200).json({
+        title: "Tarefas",
+        data: { user: req.user, message: "Dados das tarefas iriam aqui." } // Placeholder
     });
-}
+});
 
-module.exports = routeGet;
+// NOVO: Uma rota para obter o token CSRF
+// O frontend chamará esta rota antes de fazer um POST/PUT/DELETE para obter um token válido.
+router.get('/csrf-token', (req, res) => {
+    res.json({ csrfToken: req.csrfToken() });
+});
+
+
+module.exports = router;

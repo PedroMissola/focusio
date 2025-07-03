@@ -1,8 +1,11 @@
-const { validarCampos, validarHorario, isHoraPermitida } = require('./verifications');
+const { isNotEmpty, validarHorario, isHoraPermitida } = require('./verifications');
 const { getAreasDeConhecimentoEMaterias } = require('../firebase/consultation/consultaMaterias');
-const fetch = require('node-fetch'); // Certifique-se de ter o node-fetch instalado
 
-// Função para calcular a semana do ano
+// NOVO: Importar diretamente as funções do Firebase que você vai criar.
+// Estas são funções hipotéticas que você precisará implementar.
+const { getTasksByDate, insertTaskInFirestore } = require('../firebase/firestore/tasks');
+
+// Função para calcular a semana do ano (lógica mantida)
 function getWeekNumber(d) {
     d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
     d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
@@ -11,96 +14,78 @@ function getWeekNumber(d) {
     return [d.getUTCFullYear(), weekNo];
 }
 
-// Função para verificar se uma matéria da mesma área já foi registrada no dia
+// ALTERADO: A função agora chama diretamente o banco de dados.
 async function isMateriaJaRegistrada(materia, data, UID) {
     try {
-        const response = await fetch('/getTasks', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ UID: UID, data: data }) // Usar o UID real do usuário
-        });
-
-        const tasks = await response.json();
+        // REMOVIDO: fetch('/getTasks')
+        // NOVO: Chamada direta à função que consulta o Firestore.
+        const tasksDoDia = await getTasksByDate(UID, data);
 
         const areasDeConhecimento = await getAreasDeConhecimentoEMaterias();
         const areaDaMateria = Object.keys(areasDeConhecimento).find(area => areasDeConhecimento[area].includes(materia));
 
-        return tasks.some(task => {
+        return tasksDoDia.some(task => {
             const areaDaTask = Object.keys(areasDeConhecimento).find(area => areasDeConhecimento[area].includes(task.materia));
             return areaDaTask === areaDaMateria;
         });
     } catch (error) {
         console.error('Erro ao verificar matéria registrada:', error);
-        return false;
+        // Em caso de erro, é mais seguro impedir o registro para evitar duplicatas.
+        return true;
     }
 }
 
-async function handleTaskRequest(req, res) {
+// ALTERADO: O nome da função agora é mais descritivo
+async function createTaskHandler(req, res) {
+    // ALTERADO: Obtendo o UID e o nome do usuário a partir do req.user injetado pelo authMiddleware
+    const { uid, name } = req.user;
     const { periodo, horarioInicio, horarioTermino, materia, assunto } = req.body;
 
-    // Verifica se todos os campos estão preenchidos
-    if (!validarCampos(periodo, horarioInicio, horarioTermino, materia, assunto)) {
-        return res.status(400).json({ message: "Todos os campos são obrigatórios." });
+    // Validações
+    if (!isNotEmpty(periodo) || !isNotEmpty(horarioInicio) || !isNotEmpty(horarioTermino) || !isNotEmpty(materia) || !isNotEmpty(assunto)) {
+        return res.status(400).json({ error: "Todos os campos são obrigatórios." });
     }
-
     if (!validarHorario(horarioInicio, horarioTermino)) {
-        return res.status(400).json({ message: "Horário inválido." });
+        return res.status(400).json({ error: "O horário de término deve ser após o horário de início." });
     }
-
-    const horaInicioInt = parseInt(horarioInicio.split(':')[0]);
-    const horaTerminoInt = parseInt(horarioTermino.split(':')[0]);
-
-    if (!isHoraPermitida(horaInicioInt, horaTerminoInt, periodo)) {
-        return res.status(400).json({ message: "Hora não permitida para o período selecionado." });
-    }
-
-    const [ano, numeroSemana] = getWeekNumber(new Date());
-    const tempoEstimado = horaTerminoInt - horaInicioInt;
-
-    const UID = req.headers.authorization.split("Bearer ")[1]; // Obter o UID do cabeçalho de autorização
-
-    const data = {
-        UID: UID, // Usar o UID real do usuário
-        nome: 'Nome', // Substitua pelo nome real do usuário
-        sobrenome: 'Sobrenome', // Substitua pelo sobrenome real do usuário
-        materia: materia,
-        horarioInicio: horarioInicio,
-        horarioTermino: horarioTermino,
-        tempoEstimado: tempoEstimado,
-        periodo: periodo,
-        ano: ano,
-        numeroSemana: numeroSemana,
-        assunto: assunto
-    };
-
-    const hoje = new Date().toISOString().split('T')[0];
-
-    if (await isMateriaJaRegistrada(materia, hoje, UID)) {
-        return res.status(400).json({ message: "Você já registrou uma matéria dessa área hoje." });
+    if (!isHoraPermitida(horarioInicio, horarioTermino, periodo)) {
+        return res.status(400).json({ error: "O horário selecionado não pertence ao período." });
     }
 
     try {
-        const response = await fetch('/insertTasks', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(data)
-        });
-
-        const result = await response.json();
-
-        if (response.ok) {
-            return res.status(200).json({ message: result.taskSuccessMessage });
-        } else {
-            return res.status(500).json({ message: result.taskErrorMessage });
+        const hoje = new Date().toISOString().split('T')[0];
+        if (await isMateriaJaRegistrada(materia, hoje, uid)) {
+            return res.status(400).json({ error: "Você já registrou uma matéria desta área de conhecimento hoje." });
         }
+        
+        const horaInicioInt = parseInt(horarioInicio.split(':')[0]);
+        const horaTerminoInt = parseInt(horarioTermino.split(':')[0]);
+        const [ano, numeroSemana] = getWeekNumber(new Date());
+
+        const taskData = {
+            UID: uid,
+            userName: name, // ALTERADO: Usando o nome real do usuário
+            materia: materia,
+            assunto: assunto,
+            horarioInicio: horarioInicio,
+            horarioTermino: horarioTermino,
+            tempoEstimado: horaTerminoInt - horaInicioInt,
+            periodo: periodo,
+            ano: ano,
+            numeroSemana: numeroSemana,
+            createdAt: new Date().toISOString()
+        };
+        
+        // REMOVIDO: fetch('/insertTasks')
+        // NOVO: Chamada direta à função que insere no Firestore
+        const novaTarefaId = await insertTaskInFirestore(taskData);
+
+        return res.status(201).json({ message: "Tarefa criada com sucesso!", taskId: novaTarefaId });
+
     } catch (error) {
-        console.error('Erro ao inserir tarefa:', error);
-        return res.status(500).json({ message: "Erro ao inserir tarefa. Tente novamente." });
+        console.error('Erro no handler de criação de tarefa:', error);
+        return res.status(500).json({ error: "Erro interno ao processar a solicitação da tarefa." });
     }
 }
 
-module.exports = { handleTaskRequest };
+module.exports = { createTaskHandler };

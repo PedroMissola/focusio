@@ -1,28 +1,29 @@
 const admin = require('firebase-admin');
 
-// Middleware para checar se o usuário está autenticado e o e-mail está verificado
+// ALTERADO: A lógica agora retorna erros em JSON em vez de redirecionar.
 async function authMiddleware(req, res, next) {
-    const isLoggedIn = req.cookies.loggedIn;
+    const sessionCookie = req.cookies.session || '';
 
-    if (!isLoggedIn) {
-        return res.redirect('/login');
-    }
-
-    if (!req.cookies.session) {
-        return res.redirect('/login');
+    if (!sessionCookie) {
+        // Se não há cookie de sessão, o usuário não está autenticado.
+        return res.status(401).json({ error: 'Unauthorized: No session cookie provided.' });
     }
 
     try {
-        const decodedClaims = await admin.auth().verifySessionCookie(req.cookies.session, true);
-        if (decodedClaims.email_verified) {
-            req.user = decodedClaims;
-            next();
-        } else {
-            res.redirect('/verify-email');
+        // Verifica o cookie de sessão com o Firebase. O segundo argumento `true` checa por revogação.
+        const decodedClaims = await admin.auth().verifySessionCookie(sessionCookie, true);
+
+        if (!decodedClaims.email_verified) {
+            // O usuário está autenticado, mas o e-mail não foi verificado.
+            return res.status(403).json({ error: 'Forbidden: Email not verified.' });
         }
+        
+        // Adiciona os dados do usuário ao objeto `req` para uso em outras rotas.
+        req.user = decodedClaims;
+        next();
     } catch (error) {
-        //console.error('Erro ao verificar usuário:', error);
-        res.redirect('/login');
+        // O cookie é inválido ou expirou.
+        return res.status(401).json({ error: 'Unauthorized: Invalid session cookie.' });
     }
 }
 
